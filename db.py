@@ -108,6 +108,23 @@ gw_results = Table(
 )
 
 
+recommendations = Table(
+    "recommendations", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("captured_at", DateTime(timezone=True), nullable=False),
+    Column("gw", Integer, nullable=False),
+    Column("mode", String(16)),              # daily | deadline
+    Column("transfers_in", String(512)),
+    Column("transfers_out", String(512)),
+    Column("hits", Integer),
+    Column("captain", String(64)),
+    Column("vice", String(64)),
+    Column("bench_order", String(512)),
+    Column("projected_pts", Float),
+    Column("summary", String(2048)),         # human-readable brief
+)
+
+
 class EngineDB:
     def __init__(self, url: Optional[str] = None):
         url = url or os.environ.get("DATABASE_URL")
@@ -181,6 +198,19 @@ class EngineDB:
         with self.engine.begin() as cx:
             cx.execute(insert(gw_results), rows)
         return len(rows)
+
+    def save_recommendation(self, gw: int, mode: str, rec: dict) -> None:
+        row = {"captured_at": self._now(), "gw": gw, "mode": mode, **rec}
+        with self.engine.begin() as cx:
+            cx.execute(insert(recommendations), [row])
+
+    def latest_recommendation(self, gw: Optional[int] = None) -> Optional[dict]:
+        q = select(recommendations).order_by(recommendations.c.captured_at.desc())
+        if gw is not None:
+            q = q.where(recommendations.c.gw == gw)
+        with self.engine.connect() as cx:
+            r = cx.execute(q.limit(1)).first()
+        return dict(r._mapping) if r else None
 
     # ---- readers (backtest & EO) --------------------------------------------
 
