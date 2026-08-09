@@ -31,7 +31,7 @@ from history_store import HistoryStore
 from module1_data_ingestion import FPLClient
 from module2_xpts_engine import (FixtureContext, PlayerProfile,
                                  ensemble_team_xg, xpts_gameweek)
-from module3_minutes_engine import MinutesEngine, StartsModel
+from module3_minutes_engine import MinutesEngine, StartsModel, XMinsEstimate
 from module6_optimizer import OptPlayer, SquadOptimizer
 
 RIVAL_IDS = [int(x) for x in os.environ.get("RIVAL_IDS", "").split(",") if x.strip()]
@@ -39,6 +39,31 @@ MY_ENTRY_ID = os.environ.get("MY_ENTRY_ID")
 HORIZON = 5
 
 FLAG_FROM_CHANCE = {None: "100", 100: "100", 75: "75", 50: "50", 25: "25", 0: "0"}
+
+# --- pre-season priors -------------------------------------------------------
+# Before any 26/27 minutes exist, FPL price is the best public summary of a
+# player's expected role and output (it encodes last season's returns). These
+# priors stop the optimizer treating every player as identical.
+
+PRICE_FLOOR = {"GKP": 4.0, "DEF": 4.0, "MID": 4.5, "FWD": 4.5}
+# xG90 + xA90 at the top of each position's price range
+PRIOR_ATT_TOP = {"GKP": 0.00, "DEF": 0.18, "MID": 0.70, "FWD": 0.85}
+PRIOR_ATT_BASE = {"GKP": 0.00, "DEF": 0.04, "MID": 0.10, "FWD": 0.15}
+
+
+def preseason_priors(p: dict) -> tuple[float, float, float]:
+    """(xg90, xa90, p_start_prior) from price + ownership when no data exists."""
+    pos = p["position"]
+    floor = PRICE_FLOOR[pos]
+    # normalised price position within the position's range (0 = cheap, 1 = premium)
+    q = min(max((p["now_cost"] - floor) / 8.0, 0.0), 1.0)
+    att = PRIOR_ATT_BASE[pos] + (PRIOR_ATT_TOP[pos] - PRIOR_ATT_BASE[pos]) * (q ** 0.75)
+    # attackers skew to goals, midfielders split, defenders mostly assists
+    goal_share = {"GKP": 0.0, "DEF": 0.35, "MID": 0.55, "FWD": 0.75}[pos]
+    xg90, xa90 = att * goal_share, att * (1 - goal_share)
+    # nailed-ness: price is the strongest signal, ownership a mild confirmation
+    p_start = 0.25 + 0.60 * q + 0.15 * min(p["selected_by_percent"] / 30.0, 1.0)
+    return xg90, xa90, min(p_start, 0.95)
 
 
 # ---------------------------------------------------------------------------
@@ -110,19 +135,35 @@ def compute_xpts(client: FPLClient, db: EngineDB, gw: int,
         if p["status"] in ("i", "s", "u"):     # injured / suspended / unavailable
             flag = "0"
         est = engine.estimate(hist, days_rest=7, flag=flag)
-        xmins[p["id"]] = est
 
-        mins90 = max(p["minutes"], 90)
+        # Pre-season / no-data fallback: derive priors from price + ownership,
+        # otherwise every player looks identical and the optimizer buys junk.
+        if not hist or p["minutes"] < 90:
+            xg90, xa90, ps_prior = preseason_priors(p)
+            if flag != "0":
+                est = XMinsEstimate(
+                    p_start=round(ps_prior, 3), p_cameo=0.5,
+                    e_mins_start=78.0, e_mins_cameo=18.0,
+                    xmins=round(ps_prior * 78.0 + (1 - ps_prior) * 0.5 * 18.0, 1),
+                    p60=round(ps_prior * 0.88, 3),
+                    p_any=round(ps_prior + (1 - ps_prior) * 0.5, 3),
+                    flags=["preseason prior (price/ownership)"])
+        else:
+            mins90 = max(p["minutes"], 90)
+            xg90 = p["xg"] / mins90 * 90
+            xa90 = p["xa"] / mins90 * 90
+
+        xmins[p["id"]] = est
         prof = PlayerProfile(
             player_id=p["id"], name=p["web_name"], team=p["team"],
             position=p["position"], baseline_xmins=est.e_mins_start,
-            xg90=p["xg"] / mins90 * 90, xa90=p["xa"] / mins90 * 90,
+            xg90=xg90, xa90=xa90,
             team_xg90_share_context=team_xg_ctx.get(p["team_id"], 1.5),
         )
         fixtures = contexts.get(p["team_id"], [])
         xpts[p["id"]] = round(xpts_gameweek(prof, fixtures, est), 3)
 
-    print(f"[xpts] computed for {len(xpts)} players")
+    print(f"[xpts] GW{gw}: computed for {len(xpts)} players")
     return xpts, xmins
 
 

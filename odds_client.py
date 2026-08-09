@@ -17,6 +17,7 @@ Python >= 3.10
 
 from __future__ import annotations
 
+import math
 import os
 from typing import Optional
 
@@ -114,34 +115,75 @@ class OddsClient:
                 for k in [k for k, v in d.items() if None in v]:
                     del d[k]
 
-        # Fallback: split the match total ~55/45 by 1X2 strength
+        # Derive team totals from the match total, split by 1X2 supremacy.
         if not mo.home_totals and not mo.away_totals:
             tot = {m["key"]: m for m in book["markets"]}.get("totals")
             if tot:
-                for o in tot["outcomes"]:
-                    line, side, price = o["point"], o["name"].lower(), o["price"]
-                    # attribute the same line to both sides at a shifted level
-                    for target in (mo.home_totals, mo.away_totals):
-                        cur = target.get(line / 2, (None, None))
-                        target[line / 2] = (price, cur[1]) if side == "over" else (cur[0], price)
-                for d in (mo.home_totals, mo.away_totals):
-                    for k in [k for k, v in d.items() if None in v]:
-                        del d[k]
+                mo.total_goals = self._total_from_market(tot)
+                mo.home_share = self._supremacy_share(hw, dr, aw)
         return mo
 
+    @staticmethod
+    def _total_from_market(tot: dict) -> float:
+        """Implied total match goals (lambda_home + lambda_away) from O/U."""
+        from module1_data_ingestion import lambda_from_over_under, strip_vig
+        lams = []
+        by_line: dict[float, dict[str, float]] = {}
+        for o in tot["outcomes"]:
+            by_line.setdefault(o["point"], {})[o["name"].lower()] = o["price"]
+        for line, sides in by_line.items():
+            if "over" in sides and "under" in sides:
+                fair = strip_vig({"over": sides["over"], "under": sides["under"]})
+                lams.append(lambda_from_over_under(line, fair["over"]))
+        return sum(lams) / len(lams) if lams else 2.7
+
+    @staticmethod
+    def _supremacy_share(hw: float, dr: float, aw: float) -> float:
+        """Home team's share of total goals, inferred from win probabilities.
+
+        A 50/50 match splits 50/50; a heavy favourite takes proportionally more.
+        Uses sqrt of the win-odds ratio to damp extremes, then clamps."""
+        from module1_data_ingestion import strip_vig
+        f = strip_vig({"H": hw, "D": dr, "A": aw})
+        ratio = (f["H"] + 0.5 * f["D"]) / max(f["A"] + 0.5 * f["D"], 1e-6)
+        share = math.sqrt(ratio) / (1 + math.sqrt(ratio))
+        return min(max(share, 0.25), 0.78)
+
     def fetch_calibrated(self) -> list[CalibratedMatch]:
-        """Full path: API -> MatchOdds -> CalibratedMatch (fair probs + lambdas)."""
+        """Full path: API -> MatchOdds -> CalibratedMatch (fair probs + lambdas).
+
+        NOTE: `team_totals` is not served on the /odds endpoint (it's an
+        event-level market and generally paid), and requesting it returns 422.
+        We request h2h + totals and derive team lambdas from the match total
+        split by 1X2 supremacy — see `to_match_odds`.
+        """
         cal = OddsCalibrator()
         out: list[CalibratedMatch] = []
-        for ev in self.fetch_raw(markets="h2h,totals,team_totals"):
+        for ev in self.fetch_raw(markets="h2h,totals"):
             mo = self.to_match_odds(ev)
             if not mo:
                 continue
             try:
-                out.append(cal.calibrate(mo))
+                if getattr(mo, "total_goals", None):
+                    out.append(self._calibrate_from_total(mo))
+                else:
+                    out.append(cal.calibrate(mo))
             except ValueError:
                 continue          # no usable goal markets for this fixture
         return out
+
+    @staticmethod
+    def _calibrate_from_total(mo) -> CalibratedMatch:
+        """Build CalibratedMatch when only the match total + 1X2 are available."""
+        from module1_data_ingestion import strip_vig
+        f = strip_vig({"H": mo.home_win, "D": mo.draw, "A": mo.away_win})
+        lam_h = mo.total_goals * mo.home_share
+        lam_a = mo.total_goals * (1 - mo.home_share)
+        return CalibratedMatch(
+            home_team=mo.home_team, away_team=mo.away_team,
+            p_home=f["H"], p_draw=f["D"], p_away=f["A"],
+            lambda_home=lam_h, lambda_away=lam_a,
+            p_cs_home=math.exp(-lam_a), p_cs_away=math.exp(-lam_h))
 
 
 if __name__ == "__main__":

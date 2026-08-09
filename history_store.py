@@ -18,7 +18,8 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, Integer, String, Table, delete, insert, select
+from sqlalchemy import (Column, DateTime, Float, Integer, String, Table,
+                        delete, insert, select)
 
 from db import EngineDB, metadata
 from module1_data_ingestion import FPLClient
@@ -61,6 +62,10 @@ class HistoryStore:
             # skip players who have never featured — saves hundreds of calls
             player_ids = [p["id"] for p in players
                           if p["minutes"] >= min_minutes_season]
+            if not player_ids:
+                print("[history] no player has minutes yet (pre-season) — "
+                      "nothing to refresh; xPts falls back to price priors")
+                return 0
         now = datetime.now(timezone.utc)
         total = 0
         for n, pid in enumerate(player_ids, 1):

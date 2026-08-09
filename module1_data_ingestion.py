@@ -57,6 +57,9 @@ class FPLClient:
                 return data
             except (requests.RequestException, ValueError) as e:
                 last_err = e
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status is not None and 400 <= status < 500 and status != 429:
+                    break                     # 4xx won't heal on retry (except 429)
                 time.sleep(self.backoff ** attempt)
         raise RuntimeError(f"FPL API failed after {self.max_retries} tries: {url}") from last_err
 
@@ -135,6 +138,9 @@ class MatchOdds:
     # Clean sheet (yes, no) odds
     home_cs: Optional[tuple[float, float]] = None
     away_cs: Optional[tuple[float, float]] = None
+    # Derived when only a match-total market is available (see odds_client)
+    total_goals: Optional[float] = None
+    home_share: float = 0.55
 
 
 def strip_vig(odds: dict[str, float]) -> dict[str, float]:
