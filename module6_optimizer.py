@@ -147,13 +147,20 @@ class SquadOptimizer:
 
         # free-transfer bank + hits: ft_{g+1} = min(5, ft_g - used + 1) linearized
         m += ft[G[0]] == self.ft0
+        # Initial draft (pre-season / wildcard): building the first 15 is free.
+        initial_build = not self.current_squad
         for k, g in enumerate(G):
             n_tr = pulp.lpSum(tin[i][g] for i in P)
-            m += hits[g] >= n_tr - ft[g]
-            m += hits[g] <= n_tr                      # can't buy FTs with hits
+            if k == 0 and initial_build:
+                m += hits[g] == 0        # the first 15 cost nothing...
+                used = 0                 # ...and consume no free transfers
+            else:
+                m += hits[g] >= n_tr - ft[g]
+                m += hits[g] <= n_tr                  # can't buy FTs with hits
+                used = n_tr - hits[g]
             if k < len(G) - 1:
                 nxt = G[k + 1]
-                m += ft[nxt] <= ft[g] - (n_tr - hits[g]) + 1
+                m += ft[nxt] <= ft[g] - used + 1
                 m += ft[nxt] <= 5
                 m += ft[nxt] >= 1
 

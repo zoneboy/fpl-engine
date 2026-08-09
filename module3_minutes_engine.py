@@ -82,8 +82,12 @@ class StartsModel:
         self.rotation_idx = max(0.0, min(1.0, manager_rotation_index))
 
     # -- base rate ----------------------------------------------------------
-    def base_start_rate(self, history: list[MatchRecord]) -> float:
-        """Exponentially-weighted PL start rate over matches the player was fit for."""
+    def base_start_rate(self, history: list[MatchRecord],
+                        prior: float = 0.30) -> float:
+        """Exponentially-weighted PL start rate over matches the player was fit for.
+
+        `prior` is returned when there is no usable history (e.g. preseason);
+        callers can supply a last-season-derived rate instead of the default."""
         num, den = 0.0, 0.0
         for m in history:
             if not m.in_squad:
@@ -94,7 +98,7 @@ class StartsModel:
             num += w * (1.0 if m.started else 0.0)
             den += w
         if den == 0:
-            return 0.30                       # no evidence -> conservative prior
+            return min(max(prior, 0.02), 0.98)
         return num / den
 
     # -- contextual log-odds adjustments -------------------------------------
@@ -110,8 +114,9 @@ class StartsModel:
     def p_start(self, history: list[MatchRecord], days_rest: int,
                 matches_next_7_days: int = 1,
                 games_since_return: Optional[int] = None,
-                explain: Optional[list[str]] = None) -> float:
-        z = self._logit(self.base_start_rate(history))
+                explain: Optional[list[str]] = None,
+                prior_start_rate: float = 0.30) -> float:
+        z = self._logit(self.base_start_rate(history, prior=prior_start_rate))
         log = explain if explain is not None else []
 
         # Rest-day effect, scaled by how rotation-happy the manager is
@@ -227,12 +232,14 @@ class MinutesEngine:
                  matches_next_7_days: int = 1,
                  games_since_return: Optional[int] = None,
                  flag: str = "100", news: Optional[NewsOverride] = None,
-                 now: Optional[datetime] = None) -> XMinsEstimate:
+                 now: Optional[datetime] = None,
+                 prior_start_rate: float = 0.30) -> XMinsEstimate:
         now = now or datetime.now(timezone.utc)
         flags_log: list[str] = []
 
         ps = self.starts.p_start(history, days_rest, matches_next_7_days,
-                                 games_since_return, explain=flags_log)
+                                 games_since_return, explain=flags_log,
+                                 prior_start_rate=prior_start_rate)
         ems = e_mins_given_start(history)
         pc, emc = cameo_profile(history)
 
