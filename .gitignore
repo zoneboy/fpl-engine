@@ -1,0 +1,10 @@
+# local environment
+.venv/
+.env
+
+# python artifacts
+__pycache__/
+*.pyc
+
+# local test databases
+*.db
