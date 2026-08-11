@@ -200,7 +200,9 @@ class EngineDB:
         return len(rows)
 
     def save_recommendation(self, gw: int, mode: str, rec: dict) -> None:
-        row = {"captured_at": self._now(), "gw": gw, "mode": mode, **rec}
+        cols = {c.name for c in recommendations.columns}
+        row = {k: v for k, v in rec.items() if k in cols}   # ignore brief-only keys
+        row.update({"captured_at": self._now(), "gw": gw, "mode": mode})
         with self.engine.begin() as cx:
             cx.execute(insert(recommendations), [row])
 

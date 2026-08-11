@@ -51,6 +51,11 @@ def format_brief(gw: int, rec: dict, urgent: bool = False) -> str:
     lines += [
         f"*Captain:* {rec.get('captain', '?')}",
         f"*Vice:* {rec.get('vice', '?')}",
+    ]
+    if rec.get("lineup"):
+        formation = f" ({rec['formation']})" if rec.get("formation") else ""
+        lines += ["", f"*XI{formation}:*", rec["lineup"]]
+    lines += [
         f"*Bench order:* {rec.get('bench_order', '?')}",
         "",
         f"Projected (5 GW): {rec.get('projected_pts', 0):.1f} pts",
@@ -61,6 +66,10 @@ def format_brief(gw: int, rec: dict, urgent: bool = False) -> str:
 if __name__ == "__main__":
     demo = {"transfers_in": "Isak", "transfers_out": "Havertz", "hits": 0,
             "captain": "Salah", "vice": "Saka",
-            "bench_order": "Raya, Mitchell, Wissa, Rogers",
+            "bench_order": "Mitchell, Wissa, Rogers",
+            "lineup": ("GKP: Raya\nDEF: Gabriel, Timber, Calafiori\n"
+                       "MID: Saka, Palmer, Ødegaard, Rice\n"
+                       "FWD: Haaland, Isak, João Pedro"),
+            "formation": "3-4-3",
             "projected_pts": 312.4}
     print(format_brief(12, demo))

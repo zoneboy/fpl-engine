@@ -183,9 +183,11 @@ def my_squad(client: FPLClient, gw: int) -> tuple[set[int], float, int]:
 
 
 def solve(client: FPLClient, gw: int, xpts_by_gw: dict[int, dict[int, float]],
-          forced_out: set[int] | None = None) -> tuple[object, dict[int, str]]:
+          forced_out: set[int] | None = None
+          ) -> tuple[object, dict[int, str], dict[int, str]]:
     players = client.players_frame()
     names = {p["id"]: f"{p['web_name']} ({p['team']})" for p in players}
+    positions = {p["id"]: p["position"] for p in players}
     squad, bank, ft = my_squad(client, gw)
     gws = sorted(xpts_by_gw)
 
@@ -197,11 +199,19 @@ def solve(client: FPLClient, gw: int, xpts_by_gw: dict[int, dict[int, float]],
 
     opt = SquadOptimizer(pool, gws, current_squad=squad, bank=bank,
                          free_transfers=ft, forced_out=forced_out)
-    return opt.solve(time_limit=120), names
+    return opt.solve(time_limit=120), names, positions
 
 
-def package(res, names: dict[int, str], gw: int) -> dict:
+def package(res, names: dict[int, str], positions: dict[int, str],
+            gw: int) -> dict:
     nm = lambda i: names.get(i, str(i))
+    xi = res.starting.get(gw, [])
+    by_pos = {pos: [i for i in xi if positions.get(i) == pos]
+              for pos in ("GKP", "DEF", "MID", "FWD")}
+    formation = (f"{len(by_pos['DEF'])}-{len(by_pos['MID'])}"
+                 f"-{len(by_pos['FWD'])}")
+    lineup = "\n".join(f"{pos}: " + ", ".join(map(nm, by_pos[pos]))
+                       for pos in ("GKP", "DEF", "MID", "FWD") if by_pos[pos])
     return {
         "transfers_in": ", ".join(map(nm, res.transfers_in.get(gw, []))) or "",
         "transfers_out": ", ".join(map(nm, res.transfers_out.get(gw, []))) or "",
@@ -209,8 +219,11 @@ def package(res, names: dict[int, str], gw: int) -> dict:
         "captain": nm(res.captain.get(gw, -1)),
         "vice": nm(res.vice.get(gw, -1)),
         "bench_order": ", ".join(map(nm, res.bench_order.get(gw, []))),
+        "lineup": lineup,
+        "formation": formation,
         "projected_pts": res.objective,
-        "summary": f"status={res.status}",
+        "summary": f"status={res.status} | XI ({formation}): "
+                   + "; ".join(map(nm, xi)),
     }
 
 
@@ -265,8 +278,8 @@ def run(gw: int, mode: str) -> None:
         print(f"[emergency] {len(forced_out)} players excluded (xMins <= 10)")
 
     # 5. solve
-    res, names = solve(client, gw, xpts_by_gw, forced_out)
-    rec = package(res, names, gw)
+    res, names, positions = solve(client, gw, xpts_by_gw, forced_out)
+    rec = package(res, names, positions, gw)
     db.save_recommendation(gw, mode, rec)
 
     # 6. report
