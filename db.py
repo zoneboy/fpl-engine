@@ -125,12 +125,25 @@ recommendations = Table(
 )
 
 
+def normalize_db_url(url: str) -> str:
+    """Point any Postgres URL at the installed psycopg2 driver.
+
+    Neon's dashboard hands out several variants (postgres://, postgresql://,
+    postgresql+psycopg://). SQLAlchemy rejects postgres:// outright and loads
+    psycopg v3 for +psycopg, which isn't installed — so pin the scheme."""
+    url = url.strip()
+    for prefix in ("postgres://", "postgresql://", "postgresql+psycopg://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg2://" + url[len(prefix):]
+    return url
+
+
 class EngineDB:
     def __init__(self, url: Optional[str] = None):
         url = url or os.environ.get("DATABASE_URL")
         if not url:
             raise ValueError("Set DATABASE_URL (Neon connection string) or pass url=")
-        self.engine = create_engine(url, pool_pre_ping=True)
+        self.engine = create_engine(normalize_db_url(url), pool_pre_ping=True)
         metadata.create_all(self.engine)
 
     def _now(self) -> datetime:
