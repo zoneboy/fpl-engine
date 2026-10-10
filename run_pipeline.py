@@ -70,23 +70,24 @@ def preseason_priors(p: dict) -> tuple[float, float, float]:
 # helpers
 # ---------------------------------------------------------------------------
 
-def fetch_market_lambdas(gw_teams: set[str]) -> dict[str, float]:
-    """{team_short: lambda} for the upcoming round. Empty dict if no API key."""
+def fetch_market_lambdas(gw_teams: set[str]) -> tuple[dict[str, float], list]:
+    """({team_short: lambda}, calibrated matches) for the upcoming round.
+    Both empty if no API key. One API call — the free tier is 500/month."""
     if not os.environ.get("ODDS_API_KEY"):
         print("[odds] ODDS_API_KEY not set — skipping market leg")
-        return {}
+        return {}, []
     try:
         from odds_client import OddsClient
         cal = OddsClient().fetch_calibrated()
     except Exception as e:
         print(f"[odds] fetch failed ({e}) — continuing without market leg")
-        return {}
+        return {}, []
     out: dict[str, float] = {}
     for c in cal:
         out[c.home_team] = c.lambda_home
         out[c.away_team] = c.lambda_away
     print(f"[odds] lambdas for {len(out)} teams")
-    return out
+    return out, cal
 
 
 def build_fixture_contexts(client: FPLClient, gw: int,
@@ -250,11 +251,10 @@ def run(gw: int, mode: str) -> None:
             print(f"[rival {mid}] skipped ({e})")
 
     # 2. odds
-    market = fetch_market_lambdas(set())
-    if market:
+    market, calibrated = fetch_market_lambdas(set())
+    if calibrated:
         try:
-            from odds_client import OddsClient
-            db.save_odds(gw, OddsClient().fetch_calibrated())
+            db.save_odds(gw, calibrated)
         except Exception as e:
             print(f"[odds] save skipped ({e})")
 

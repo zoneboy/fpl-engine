@@ -80,6 +80,12 @@ class OddsClient:
             for b in books:
                 if b["key"] == self.bookmaker:
                     return b
+        # Many UK books quote h2h only; without a goals market the fixture
+        # can't be calibrated and gets dropped. Prefer a book with both.
+        for b in books:
+            keys = {m["key"] for m in b.get("markets", [])}
+            if {"h2h", "totals"} <= keys:
+                return b
         return books[0]
 
     def to_match_odds(self, event: dict) -> Optional[MatchOdds]:
