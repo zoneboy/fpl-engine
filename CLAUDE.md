@@ -43,6 +43,7 @@ Neon cache┘
 | `odds_client.py` | the-odds-api.com → MatchOdds → CalibratedMatch | done, **untested against live API** |
 | `history_store.py` | Weekly element-summary pull → MatchRecord cache | done, **untested against live API** |
 | `notify.py` | Telegram push | done |
+| `gameweek.py` | GW/deadline resolution + Actions deadline gate (stdlib only) | done |
 | `run_pipeline.py` | Orchestrator (daily/weekly/deadline modes) | done, **untested end-to-end** |
 
 **Not built:** Module 4 (price-change prediction), Module 5 (chip strategy),
@@ -64,9 +65,17 @@ Hooks exist for all four — see "Next work" below.
 - Everything written to Neon carries `captured_at` so history is reconstructable.
 - **Gameweek is auto-detected.** `run_pipeline.py` without `--gw` plans for the
   FPL `is_next` event (upcoming deadline), falling back to `is_current` at
-  season end — see `resolve_gameweek`. Scheduled Actions never pass `--gw`;
-  a manual dispatch passes it only if a number is typed. There is no
+  season end — see `gameweek.resolve_gameweek`. Scheduled Actions never pass
+  `--gw`; a manual dispatch passes it only if a number is typed. There is no
   `CURRENT_GW` repo variable to maintain.
+- **Deadline runs follow the real deadline.** The deadline-watch cron fires
+  every 30 min (`:07`/`:37`); `gameweek.py` gates each slot on the runner's
+  bare `python3` before any install. Full runs happen hourly from 6h out,
+  every slot in the last 3h, never inside 15 min (a run takes ~15 min).
+  Simulated with GitHub cron delays up to 25 min: always >= 1 run 30-90 min
+  before the deadline, ~8.5 full runs (= odds calls) per GW. Tune via
+  `WATCH_HOURS` / `DENSE_HOURS` / `MIN_LEAD_HOURS`. `gameweek.py` must stay
+  stdlib-only.
 
 ---
 
@@ -95,6 +104,7 @@ python module3_minutes_engine.py  # xMins + emergency trigger
 python module6_optimizer.py       # MILP solves to Optimal, 1 FT/week, 0 hits
 python odds_client.py             # offline mocked payload
 python notify.py                  # message formatting
+python gameweek.py --now 2026-10-17T08:07Z   # deadline gate dry-run (live FPL API)
 ```
 
 Do not commit real API keys, entry ids, or the `.env` file.

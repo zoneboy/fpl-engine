@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: "0 6 * * *"            # daily 06:00 UTC (07:00 WAT) — snapshot + solve
     - cron: "0 4 * * 2"            # Tuesday 04:00 UTC — weekly match-history refresh
-    - cron: "*/20 15-19 * * 5,6"   # Fri/Sat 15:00-19:59 UTC — deadline watch
+    - cron: "7,37 * * * *"         # deadline watch — gated on the real FPL deadline (gameweek.py)
   workflow_dispatch:
     inputs:
       gw:
@@ -17,17 +17,18 @@ on:
         options: [daily, weekly, deadline]
         default: "daily"
 
+# One pipeline at a time: a deadline slot waits for a running daily job
+# instead of racing it on the same Neon tables.
+concurrency:
+  group: fpl-pipeline
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-      - run: pip install -r requirements.txt
 
       - name: Resolve mode from schedule
         id: cfg
@@ -35,9 +36,9 @@ jobs:
           MODE="${{ github.event.inputs.mode }}"
           if [ -z "$MODE" ]; then
             case "${{ github.event.schedule }}" in
-              "0 4 * * 2")            MODE="weekly" ;;
-              "*/20 15-19 * * 5,6")   MODE="deadline" ;;
-              *)                      MODE="daily" ;;
+              "0 4 * * 2")      MODE="weekly" ;;
+              "7,37 * * * *")   MODE="deadline" ;;
+              *)                MODE="daily" ;;
             esac
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
@@ -50,7 +51,24 @@ jobs:
         env:
           GW_INPUT: ${{ github.event.inputs.gw }}
 
+      # Scheduled deadline slots fire every 30 min; most are skipped here in
+      # seconds (stdlib only, runner's own python3, no pip install, no odds call).
+      # Manual deadline runs bypass the gate.
+      - name: Deadline gate
+        id: gate
+        if: steps.cfg.outputs.mode == 'deadline' && github.event_name == 'schedule'
+        run: python3 gameweek.py
+
+      - uses: actions/setup-python@v6
+        if: steps.gate.outputs.run != 'false'
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - if: steps.gate.outputs.run != 'false'
+        run: pip install -r requirements.txt
+
       - name: Run pipeline
+        if: steps.gate.outputs.run != 'false'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}

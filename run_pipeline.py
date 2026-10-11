@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 
 import notify
 from db import EngineDB
+from gameweek import resolve_gameweek
 from history_store import HistoryStore
 from module1_data_ingestion import FPLClient
 from module2_xpts_engine import (FixtureContext, PlayerProfile,
@@ -227,28 +228,6 @@ def package(res, names: dict[int, str], positions: dict[int, str],
         "summary": f"status={res.status} | XI ({formation}): "
                    + "; ".join(map(nm, xi)),
     }
-
-
-def _deadline(ev: dict) -> datetime | None:
-    d = ev.get("deadline_time")
-    return datetime.fromisoformat(d.replace("Z", "+00:00")) if d else None
-
-
-def resolve_gameweek(events: list[dict],
-                     gw: int | None = None) -> tuple[int, datetime | None]:
-    """(gameweek, its deadline) from bootstrap-static `events`.
-
-    Explicit gw wins. Otherwise the upcoming deadline (`is_next`), then the
-    live one (`is_current`, end of season), then the first unfinished event."""
-    if gw is not None:
-        ev = next((e for e in events if e["id"] == gw), None)
-        return gw, _deadline(ev) if ev else None
-    for key in ("is_next", "is_current"):
-        ev = next((e for e in events if e.get(key)), None)
-        if ev:
-            return ev["id"], _deadline(ev)
-    ev = next((e for e in events if not e.get("finished")), events[-1])
-    return ev["id"], _deadline(ev)
 
 
 # ---------------------------------------------------------------------------
