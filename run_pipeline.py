@@ -8,7 +8,8 @@ Modes:
   weekly    the above, preceded by a match-history refresh (~700 API calls)
   deadline  the above + emergency check against the last xMins snapshot
 
-  python run_pipeline.py --gw 1 --mode daily
+  python run_pipeline.py --mode daily            # GW auto-detected (next deadline)
+  python run_pipeline.py --gw 7 --mode daily     # explicit GW override
 
 Env / GitHub secrets:
   DATABASE_URL       Neon connection string        (required)
@@ -70,23 +71,24 @@ def preseason_priors(p: dict) -> tuple[float, float, float]:
 # helpers
 # ---------------------------------------------------------------------------
 
-def fetch_market_lambdas(gw_teams: set[str]) -> dict[str, float]:
-    """{team_short: lambda} for the upcoming round. Empty dict if no API key."""
+def fetch_market_lambdas(gw_teams: set[str]) -> tuple[dict[str, float], list]:
+    """({team_short: lambda}, calibrated matches) for the upcoming round.
+    Both empty if no API key. One API call — the free tier is 500/month."""
     if not os.environ.get("ODDS_API_KEY"):
         print("[odds] ODDS_API_KEY not set — skipping market leg")
-        return {}
+        return {}, []
     try:
         from odds_client import OddsClient
         cal = OddsClient().fetch_calibrated()
     except Exception as e:
         print(f"[odds] fetch failed ({e}) — continuing without market leg")
-        return {}
+        return {}, []
     out: dict[str, float] = {}
     for c in cal:
         out[c.home_team] = c.lambda_home
         out[c.away_team] = c.lambda_away
     print(f"[odds] lambdas for {len(out)} teams")
-    return out
+    return out, cal
 
 
 def build_fixture_contexts(client: FPLClient, gw: int,
@@ -227,12 +229,43 @@ def package(res, names: dict[int, str], positions: dict[int, str],
     }
 
 
+def _deadline(ev: dict) -> datetime | None:
+    d = ev.get("deadline_time")
+    return datetime.fromisoformat(d.replace("Z", "+00:00")) if d else None
+
+
+def resolve_gameweek(events: list[dict],
+                     gw: int | None = None) -> tuple[int, datetime | None]:
+    """(gameweek, its deadline) from bootstrap-static `events`.
+
+    Explicit gw wins. Otherwise the upcoming deadline (`is_next`), then the
+    live one (`is_current`, end of season), then the first unfinished event."""
+    if gw is not None:
+        ev = next((e for e in events if e["id"] == gw), None)
+        return gw, _deadline(ev) if ev else None
+    for key in ("is_next", "is_current"):
+        ev = next((e for e in events if e.get(key)), None)
+        if ev:
+            return ev["id"], _deadline(ev)
+    ev = next((e for e in events if not e.get("finished")), events[-1])
+    return ev["id"], _deadline(ev)
+
+
 # ---------------------------------------------------------------------------
 # modes
 # ---------------------------------------------------------------------------
 
-def run(gw: int, mode: str) -> None:
+def run(gw: int | None, mode: str) -> None:
     client, db = FPLClient(), EngineDB()
+
+    explicit = gw is not None
+    gw, deadline = resolve_gameweek(client.bootstrap()["events"], gw)
+    when = deadline.strftime("%a %d %b %H:%M UTC") if deadline else "unknown"
+    print(f"[gw] GW{gw} ({'from --gw' if explicit else 'auto-detected'}), "
+          f"deadline {when}")
+    if mode == "deadline" and deadline and deadline <= datetime.now(timezone.utc):
+        print(f"[gw] WARNING: GW{gw} deadline has already passed — "
+              f"recommendations can no longer be applied to this gameweek")
 
     if mode == "weekly":
         print("[history] weekly refresh starting (this takes a few minutes)")
@@ -250,11 +283,10 @@ def run(gw: int, mode: str) -> None:
             print(f"[rival {mid}] skipped ({e})")
 
     # 2. odds
-    market = fetch_market_lambdas(set())
-    if market:
+    market, calibrated = fetch_market_lambdas(set())
+    if calibrated:
         try:
-            from odds_client import OddsClient
-            db.save_odds(gw, OddsClient().fetch_calibrated())
+            db.save_odds(gw, calibrated)
         except Exception as e:
             print(f"[odds] save skipped ({e})")
 
@@ -290,7 +322,8 @@ def run(gw: int, mode: str) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gw", type=int, required=True)
+    ap.add_argument("--gw", type=int, default=None,
+                    help="gameweek to plan for (default: next deadline, from the FPL API)")
     ap.add_argument("--mode", choices=["daily", "weekly", "deadline"], default="daily")
     a = ap.parse_args()
     run(a.gw, a.mode)
