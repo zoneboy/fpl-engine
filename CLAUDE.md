@@ -62,6 +62,11 @@ Hooks exist for all four — see "Next work" below.
   `XMinsEstimate` as the third arg. The no-arg path is a legacy fallback.
 - DGW = multiple `FixtureContext` in the list; BGW = empty list → 0.0.
 - Everything written to Neon carries `captured_at` so history is reconstructable.
+- **Gameweek is auto-detected.** `run_pipeline.py` without `--gw` plans for the
+  FPL `is_next` event (upcoming deadline), falling back to `is_current` at
+  season end — see `resolve_gameweek`. Scheduled Actions never pass `--gw`;
+  a manual dispatch passes it only if a number is typed. There is no
+  `CURRENT_GW` repo variable to maintain.
 
 ---
 

@@ -8,11 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       gw:
-        description: "Gameweek"
-        required: true
-        default: "1"
+        description: "Gameweek (leave blank to auto-detect the next deadline)"
+        required: false
+        default: ""
       mode:
-        description: "daily | weekly | deadline"
+        description: "Run mode"
+        type: choice
+        options: [daily, weekly, deadline]
         default: "daily"
 
 jobs:
@@ -39,7 +41,14 @@ jobs:
             esac
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
-          echo "gw=${{ github.event.inputs.gw || vars.CURRENT_GW || '1' }}" >> "$GITHUB_OUTPUT"
+          # Blank (all scheduled runs) -> run_pipeline auto-detects from the FPL API
+          GW="$(echo "$GW_INPUT" | tr -d '[:space:]')"
+          if [ -n "$GW" ] && ! [[ "$GW" =~ ^[0-9]+$ ]]; then
+            echo "::error::gw input must be a number or blank, got '$GW'"; exit 1
+          fi
+          echo "gw_arg=${GW:+--gw $GW}" >> "$GITHUB_OUTPUT"
+        env:
+          GW_INPUT: ${{ github.event.inputs.gw }}
 
       - name: Run pipeline
         env:
@@ -49,4 +58,4 @@ jobs:
           MY_ENTRY_ID: ${{ secrets.MY_ENTRY_ID }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python run_pipeline.py --gw "${{ steps.cfg.outputs.gw }}" --mode "${{ steps.cfg.outputs.mode }}"
+        run: python run_pipeline.py ${{ steps.cfg.outputs.gw_arg }} --mode "${{ steps.cfg.outputs.mode }}"

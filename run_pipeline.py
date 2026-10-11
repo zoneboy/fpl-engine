@@ -8,7 +8,8 @@ Modes:
   weekly    the above, preceded by a match-history refresh (~700 API calls)
   deadline  the above + emergency check against the last xMins snapshot
 
-  python run_pipeline.py --gw 1 --mode daily
+  python run_pipeline.py --mode daily            # GW auto-detected (next deadline)
+  python run_pipeline.py --gw 7 --mode daily     # explicit GW override
 
 Env / GitHub secrets:
   DATABASE_URL       Neon connection string        (required)
@@ -228,12 +229,43 @@ def package(res, names: dict[int, str], positions: dict[int, str],
     }
 
 
+def _deadline(ev: dict) -> datetime | None:
+    d = ev.get("deadline_time")
+    return datetime.fromisoformat(d.replace("Z", "+00:00")) if d else None
+
+
+def resolve_gameweek(events: list[dict],
+                     gw: int | None = None) -> tuple[int, datetime | None]:
+    """(gameweek, its deadline) from bootstrap-static `events`.
+
+    Explicit gw wins. Otherwise the upcoming deadline (`is_next`), then the
+    live one (`is_current`, end of season), then the first unfinished event."""
+    if gw is not None:
+        ev = next((e for e in events if e["id"] == gw), None)
+        return gw, _deadline(ev) if ev else None
+    for key in ("is_next", "is_current"):
+        ev = next((e for e in events if e.get(key)), None)
+        if ev:
+            return ev["id"], _deadline(ev)
+    ev = next((e for e in events if not e.get("finished")), events[-1])
+    return ev["id"], _deadline(ev)
+
+
 # ---------------------------------------------------------------------------
 # modes
 # ---------------------------------------------------------------------------
 
-def run(gw: int, mode: str) -> None:
+def run(gw: int | None, mode: str) -> None:
     client, db = FPLClient(), EngineDB()
+
+    explicit = gw is not None
+    gw, deadline = resolve_gameweek(client.bootstrap()["events"], gw)
+    when = deadline.strftime("%a %d %b %H:%M UTC") if deadline else "unknown"
+    print(f"[gw] GW{gw} ({'from --gw' if explicit else 'auto-detected'}), "
+          f"deadline {when}")
+    if mode == "deadline" and deadline and deadline <= datetime.now(timezone.utc):
+        print(f"[gw] WARNING: GW{gw} deadline has already passed — "
+              f"recommendations can no longer be applied to this gameweek")
 
     if mode == "weekly":
         print("[history] weekly refresh starting (this takes a few minutes)")
@@ -290,7 +322,8 @@ def run(gw: int, mode: str) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gw", type=int, required=True)
+    ap.add_argument("--gw", type=int, default=None,
+                    help="gameweek to plan for (default: next deadline, from the FPL API)")
     ap.add_argument("--mode", choices=["daily", "weekly", "deadline"], default="daily")
     a = ap.parse_args()
     run(a.gw, a.mode)
